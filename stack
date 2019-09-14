@@ -1,0 +1,178 @@
+"""
+@author: jcoffey
+
+Workflow to load calculated and quality controlled receiver functions and 
+linearly stack them by backazimuth and ray parameter bins. Separating the 
+receiver functions by backazimuth allows for a directional investigation of the
+waveform. Stacking the receiver function by ray parameter bins improves the 
+desired signal through constructive interference while preserving ray parameter
+information. Process prepares stacked receiver functions for inversion. 
+"""
+
+from obspy import read, Stream, Trace
+import numpy as np
+from matplotlib import pyplot as plt
+import glob
+import os
+
+#load data
+
+station  = 'CRG14'
+gauss = 'a5'
+lower_az = 110
+upper_az = 169
+group = 'SE'
+
+my_dir = '/home/jcoffey/Research/Receiver_Fn/Canoe_Reach/new_rf_inversions/%s' %station
+
+
+files = os.path.join(my_dir,'*%s*_keep' %gauss)
+files = glob.glob(files)
+files.sort()
+
+new_stream = Stream()
+
+for fi in files:
+    
+    #getting start time and saving in metadata
+    f1 = fi.split('/')
+    f2 = f1[8]
+    f3 = f2.split('_')
+    year = f3[0]
+    month = f3[1]
+    day = f3[2]
+    hour = f3[3]
+    minute = f3[4]
+    starttime = '%s-%s-%sT%s:%s' %(year,month,day,hour,minute)
+    
+    sta = read(fi)
+    sta[0].stats.baz = sta[0].stats.sac.baz
+    sta[0].stats.user4 = sta[0].stats.sac.user4
+    sta[0].stats.starttime = starttime
+    sta[0].stats.file_name = f2
+    
+    new_stream.append(sta[0])
+
+new_stream.sort(keys=['baz'])   
+        
+
+#grouping by baz and appling linear stack
+stack_stream = Stream()
+p_list = []
+for i in range(0,len(files)):
+    if new_stream[i].stats.baz > lower_az and new_stream[i].stats.baz < upper_az:
+        stack_stream.append(new_stream[i])
+        p_list.append(new_stream[i].stats.sac.user4)
+        #print(new_stream[i].stats.baz)
+        new_stream[i].stats.user4 = new_stream[i].stats.sac.user4
+        #print(new_stream[i].stats.user4)
+        
+#grouping by ray parameter
+stack_stream.sort(keys=['user4'])
+p_list.sort()
+print(p_list)
+
+#obtaining ray parameter bounds from data
+min_p = np.min(p_list)
+max_p = np.max(p_list)
+mean_p = np.mean(p_list) 
+
+inc = str(min_p)
+inc_ls = []
+inc_ls.append(inc[0])
+inc_ls.append(inc[1])
+inc_ls.append(inc[2])
+inc_ls.append(inc[3])
+
+inc_st = ''.join(inc_ls)
+
+inc_1 = float(inc_st)
+
+#bounds set for bins
+inc_2 = inc_1+0.01
+inc_3 = inc_1+0.02
+inc_4 = inc_1+0.03
+
+first = Stream()
+second = Stream()
+third = Stream()
+fourth = Stream()
+
+p_first = []
+p_second = []
+p_third = []
+p_fourth = []
+
+#grouping by bins 
+for p in range(0,len(stack_stream)):
+    if stack_stream[p].stats.user4 < inc_2:
+        first.append(stack_stream[p])
+        print('first, %d' %p)
+        p_first.append(stack_stream[p].stats.user4)
+    elif stack_stream[p].stats.user4 < inc_3:
+        second.append(stack_stream[p])
+        print('second, %d' %p)
+        p_second.append(stack_stream[p].stats.user4)
+    elif stack_stream[p].stats.user4 < inc_4:
+        third.append(stack_stream[p])
+        print('third, %d' %p)
+        p_third.append(stack_stream[p].stats.user4)
+    else:
+        fourth.append(stack_stream[p])
+        print('fourth, %d' %p)
+        p_fourth.append(stack_stream[p].stats.user4)
+ 
+#assigning ray parameters    
+data_one = np.empty([stack_stream[0].stats.sac.npts,len(first)])
+for a in range(0,len(first)):
+    data_one[:,a] = first[a].data
+    stacked_one = np.mean(data_one,1)    
+    
+data_two = np.empty([stack_stream[0].stats.sac.npts,len(second)])
+for a in range(0,len(second)):
+    data_two[:,a] = second[a].data
+    stacked_two = np.mean(data_two,1)    
+    
+data_three = np.empty([stack_stream[0].stats.sac.npts,len(third)])
+for a in range(0,len(third)):
+    data_three[:,a] = third[a].data
+    stacked_three = np.mean(data_three,1) 
+    
+data_four = np.empty([stack_stream[0].stats.sac.npts,len(fourth)])
+for a in range(0,len(fourth)):
+    data_four[:,a] = fourth[a].data
+    stacked_four = np.mean(data_four,1) 
+  
+        
+#get header info from trace with largest baz and writing out trace
+if len(first) > 2:    
+    first_stack = new_stream[i].copy()
+    first_stack.data = stacked_one
+    first_p_value = np.mean(p_first)
+    first_stack.stats.sac.user4 = first_p_value
+    first_stack.write('%s/stacked_%s_%s_p%0.3f_%s' %(my_dir,group,gauss,first_p_value,station),'SAC')
+    print('%0.3f %d' %(first_p_value,len(first)))
+   
+if len(second) > 2:    
+    second_stack = new_stream[i].copy()
+    second_stack.data = stacked_two
+    second_p_value = np.mean(p_second)
+    second_stack.stats.sac.user4 = second_p_value
+    second_stack.write('%s/stacked_%s_%s_p%0.3f_%s' %(my_dir,group,gauss,second_p_value,station),'SAC')
+    print('%0.3f %d' %(second_p_value,len(second)))
+    
+if len(third) > 2:
+    third_stack = new_stream[i].copy()
+    third_stack.data = stacked_three
+    third_p_value = np.mean(p_third)
+    third_stack.stats.sac.user4 = third_p_value
+    third_stack.write('%s/stacked_%s_%s_p%0.3f_%s' %(my_dir,group,gauss,third_p_value,station),'SAC')
+    print('%0.3f %d' %(third_p_value,len(third)))
+
+if len(fourth) > 2:
+    fourth_stack = new_stream[i].copy()
+    fourth_stack.data = stacked_four
+    fourth_p_value = np.mean(p_fourth)
+    fourth_stack.stats.sac.user4 = fourth_p_value
+    fourth_stack.write('%s/stacked_%s_%s_p%0.3f_%s' %(my_dir,group,gauss,fourth_p_value,station),'SAC')
+    print('%0.3f %d' %(fourth_p_value,len(fourth)))
